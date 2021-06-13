@@ -53,8 +53,14 @@ extern int SDL_SendKeyboardKey(Uint8 state, SDL_Scancode scancode);
 /* Send keyboard text input */
 extern int SDL_SendKeyboardText(const char *text);
 
-/* Send editing text for selected range from start to end */
-extern int SDL_SendEditingText(const char *text, int start, int end);
+/* Send editing text which may contain a reading string in specified length from start */
+extern int SDL_SendEditingText(const char *text, int read_start, int read_length);
+
+/* Send editing text with extra information such as cursor, current target,
+   and candidate list */
+extern int SDL_SendEditingTextEx(char *composition, SDL_bool commit,
+    Uint16 cursor, Uint16 target_start, Uint16 target_end,
+    SDL_bool candshow, char *candidates, Sint8 candsel);
 
 /* Shutdown the keyboard subsystem */
 extern void SDL_KeyboardQuit(void);

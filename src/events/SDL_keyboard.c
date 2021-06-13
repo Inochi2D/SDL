@@ -652,7 +652,7 @@ SDL_SetKeyboardFocus(SDL_Window * window)
                             0, 0);
 
         /* Ensures IME compositions are committed */
-        if (SDL_EventState(SDL_TEXTINPUT, SDL_QUERY)) {
+        if (SDL_EventState(SDL_TEXTINPUT, SDL_QUERY) || SDL_EventState(SDL_TEXTEDITINGEX, SDL_QUERY)) {
             SDL_VideoDevice *video = SDL_GetVideoDevice();
             if (video && video->StopTextInput) {
                 video->StopTextInput(video);
@@ -666,7 +666,7 @@ SDL_SetKeyboardFocus(SDL_Window * window)
         SDL_SendWindowEvent(keyboard->focus, SDL_WINDOWEVENT_FOCUS_GAINED,
                             0, 0);
 
-        if (SDL_EventState(SDL_TEXTINPUT, SDL_QUERY)) {
+        if (SDL_EventState(SDL_TEXTINPUT, SDL_QUERY) || SDL_EventState(SDL_TEXTEDITINGEX, SDL_QUERY)) {
             SDL_VideoDevice *video = SDL_GetVideoDevice();
             if (video && video->StartTextInput) {
                 video->StartTextInput(video);
@@ -823,6 +823,36 @@ SDL_SendEditingText(const char *text, int start, int length)
         event.edit.start = start;
         event.edit.length = length;
         SDL_utf8strlcpy(event.edit.text, text, SDL_arraysize(event.edit.text));
+        posted = (SDL_PushEvent(&event) > 0);
+    }
+    return (posted);
+}
+
+int SDL_SendEditingTextEx(char* composition, SDL_bool commit, Uint16 cursor,
+                          Uint16 target_start, Uint16 target_end,
+                          SDL_bool candshow, char* candidates, Sint8 candsel)
+{
+    SDL_Keyboard* keyboard = &SDL_keyboard;
+    int posted = 0;
+
+    /* Post the event, if desired */
+    if (SDL_GetEventState(SDL_TEXTEDITINGEX) == SDL_ENABLE) {
+        SDL_Event event;
+        char* newcands = NULL;
+        if (candidates) {
+            newcands = (char*)SDL_malloc(MAX_CANDLIST_SIZE);
+            SDL_memcpy(newcands, candidates, MAX_CANDLIST_SIZE);
+        }
+        event.editx.type = SDL_TEXTEDITINGEX;
+        event.editx.windowID = keyboard->focus ? keyboard->focus->id : 0;
+        event.editx.composition = SDL_strdup(composition); /* needs freeing */
+        event.editx.commit = commit;
+        event.editx.cursor = cursor;
+        event.editx.target_start = target_start;
+        event.editx.target_end = target_end;
+        event.editx.candshow = candshow;
+        event.editx.candidates = newcands; /* needs freeing if not null */
+        event.editx.candsel = candsel;
         posted = (SDL_PushEvent(&event) > 0);
     }
     return (posted);

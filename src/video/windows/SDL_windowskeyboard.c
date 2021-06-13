@@ -64,6 +64,8 @@ WIN_InitKeyboard(_THIS)
     data->ime_composition[0] = 0;
     data->ime_readingstring[0] = 0;
     data->ime_cursor = 0;
+    data->ime_target_start = 0;
+    data->ime_target_end = 0;
 
     data->ime_candlist = SDL_FALSE;
     SDL_memset(data->ime_candidates, 0, sizeof(data->ime_candidates));
@@ -329,6 +331,7 @@ static void IME_SetWindow(SDL_VideoData* videodata, HWND hwnd);
 static void IME_SetupAPI(SDL_VideoData *videodata);
 static DWORD IME_GetId(SDL_VideoData *videodata, UINT uIndex);
 static void IME_SendEditingEvent(SDL_VideoData *videodata);
+static void IME_SendEditingExEvent(SDL_VideoData* videodata, SDL_bool commit);
 static void IME_DestroyTextures(SDL_VideoData *videodata);
 
 static SDL_bool UILess_SetupSinks(SDL_VideoData *videodata);
@@ -530,6 +533,7 @@ IME_GetReadingString(SDL_VideoData *videodata, HWND hwnd)
     }
     ImmReleaseContext(hwnd, himc);
     IME_SendEditingEvent(videodata);
+    IME_SendEditingExEvent(videodata, SDL_FALSE);
 }
 
 static void
@@ -724,6 +728,7 @@ IME_ClearComposition(SDL_VideoData *videodata)
     ImmNotifyIME(himc, NI_CLOSECANDIDATE, 0, 0);
     ImmReleaseContext(videodata->ime_hwnd_current, himc);
     SDL_SendEditingText("", 0, 0);
+    SDL_SendEditingTextEx("", SDL_FALSE, 0, 0, 0, SDL_FALSE, NULL, 0);
 }
 
 static void
@@ -743,6 +748,20 @@ IME_GetCompositionString(SDL_VideoData *videodata, HIMC himc, DWORD string)
         --length;
     }
     videodata->ime_composition[length] = 0;
+
+    LONG attrs_size = ImmGetCompositionStringW(himc, GCS_COMPATTR, NULL, 0);
+    if (attrs_size) {
+        char* attrs = (char *)SDL_calloc(attrs_size, sizeof(char));
+        ImmGetCompositionStringW(himc, GCS_COMPATTR, attrs, attrs_size);
+        Uint16 i;
+        for (i = 0; i < attrs_size / sizeof(attrs[0]) &&
+            attrs[i] != ATTR_TARGET_CONVERTED && attrs[i] != ATTR_TARGET_NOTCONVERTED; i++);
+        videodata->ime_target_start = i;
+        for (; i < attrs_size / sizeof(attrs[0]) &&
+            attrs[i] == ATTR_TARGET_CONVERTED || attrs[i] == ATTR_TARGET_NOTCONVERTED; i++);
+        videodata->ime_target_end = i;
+        SDL_free(attrs);
+    }
 }
 
 static void
@@ -756,27 +775,55 @@ IME_SendInputEvent(SDL_VideoData *videodata)
     videodata->ime_composition[0] = 0;
     videodata->ime_readingstring[0] = 0;
     videodata->ime_cursor = 0;
+    videodata->ime_target_start = 0;
+    videodata->ime_target_end = 0;
 }
 
 static void
 IME_SendEditingEvent(SDL_VideoData *videodata)
 {
     char *s = 0;
+    size_t cursor;
     WCHAR buffer[SDL_TEXTEDITINGEVENT_TEXT_SIZE];
     const size_t size = SDL_arraysize(buffer);
     buffer[0] = 0;
     if (videodata->ime_readingstring[0]) {
-        size_t len = SDL_min(SDL_wcslen(videodata->ime_composition), (size_t)videodata->ime_cursor);
-        SDL_wcslcpy(buffer, videodata->ime_composition, len + 1);
+        cursor = SDL_min(SDL_wcslen(videodata->ime_composition), (size_t)videodata->ime_cursor);
+        SDL_wcslcpy(buffer, videodata->ime_composition, cursor + 1);
         SDL_wcslcat(buffer, videodata->ime_readingstring, size);
-        SDL_wcslcat(buffer, &videodata->ime_composition[len], size);
+        SDL_wcslcat(buffer, &videodata->ime_composition[cursor], size);
     }
     else {
-        SDL_wcslcpy(buffer, videodata->ime_composition, size);
+        cursor = SDL_wcslcpy(buffer, videodata->ime_composition, size);
     }
     s = WIN_StringToUTF8(buffer);
-    SDL_SendEditingText(s, videodata->ime_cursor + (int)SDL_wcslen(videodata->ime_readingstring), 0);
+    SDL_SendEditingText(s, (int)cursor, (int)SDL_wcslen(videodata->ime_readingstring));
     SDL_free(s);
+}
+
+static void
+IME_SendEditingExEvent(SDL_VideoData* videodata, SDL_bool commit)
+{
+    char* composit = WIN_StringToUTF8(videodata->ime_composition);
+    char* candidates = NULL;
+    char* newcands = NULL;
+    if (videodata->ime_candlist) {
+        size_t i;
+        newcands = (char*)SDL_calloc(1, MAX_CANDLIST_SIZE);
+        for (i = 0; i < MAX_CANDLIST; i++) {
+            char* u8can = WIN_StringToUTF8(&videodata->ime_candidates[i]);
+            if (u8can) {
+                SDL_utf8strlcpy(newcands + (i * MAX_CANDLENGTH * AVG_UTF8_CHAR_LENGTH),
+                    u8can, MAX_CANDLENGTH);
+                SDL_free(u8can);
+            }
+        }
+    }
+    SDL_SendEditingTextEx(composit, commit, videodata->ime_cursor,
+        videodata->ime_target_start, videodata->ime_target_end,
+        videodata->ime_candlist, newcands, videodata->ime_candsel);
+    SDL_free(composit);
+    SDL_free(newcands);
 }
 
 static void
@@ -855,6 +902,7 @@ IME_ShowCandidateList(SDL_VideoData *videodata)
     videodata->ime_candlist = SDL_TRUE;
     IME_DestroyTextures(videodata);
     IME_SendEditingEvent(videodata);
+    IME_SendEditingExEvent(videodata, SDL_FALSE);
 }
 
 static void
@@ -864,6 +912,7 @@ IME_HideCandidateList(SDL_VideoData *videodata)
     videodata->ime_candlist = SDL_FALSE;
     IME_DestroyTextures(videodata);
     IME_SendEditingEvent(videodata);
+    IME_SendEditingExEvent(videodata, SDL_FALSE);
 }
 
 SDL_bool
@@ -889,6 +938,7 @@ IME_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM *lParam, SDL_VideoD
         himc = ImmGetContext(hwnd);
         if (*lParam & GCS_RESULTSTR) {
             IME_GetCompositionString(videodata, himc, GCS_RESULTSTR);
+            IME_SendEditingExEvent(videodata, SDL_TRUE);
             IME_SendInputEvent(videodata);
         }
         if (*lParam & GCS_COMPSTR) {
@@ -897,6 +947,7 @@ IME_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM *lParam, SDL_VideoD
 
             IME_GetCompositionString(videodata, himc, GCS_COMPSTR);
             IME_SendEditingEvent(videodata);
+            IME_SendEditingExEvent(videodata, SDL_FALSE);
         }
         ImmReleaseContext(hwnd, himc);
         break;
@@ -905,6 +956,7 @@ IME_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM *lParam, SDL_VideoD
         videodata->ime_readingstring[0] = 0;
         videodata->ime_cursor = 0;
         SDL_SendEditingText("", 0, 0);
+        SDL_SendEditingTextEx("", SDL_FALSE, 0, 0, 0, SDL_FALSE, NULL, 0);
         break;
     case WM_IME_NOTIFY:
         switch (wParam) {
@@ -1112,6 +1164,7 @@ STDMETHODIMP UIElementSink_UpdateUIElement(TSFSink *sink, DWORD dwUIElementId)
             WCHAR *s = (WCHAR *)bstr;
             SDL_wcslcpy(videodata->ime_readingstring, s, SDL_arraysize(videodata->ime_readingstring));
             IME_SendEditingEvent(videodata);
+            IME_SendEditingExEvent(videodata, SDL_FALSE);
             SysFreeString(bstr);
         }
         preading->lpVtbl->Release(preading);
@@ -1135,6 +1188,7 @@ STDMETHODIMP UIElementSink_EndUIElement(TSFSink *sink, DWORD dwUIElementId)
     if (SUCCEEDED(element->lpVtbl->QueryInterface(element, &IID_ITfReadingInformationUIElement, (LPVOID *)&preading))) {
         videodata->ime_readingstring[0] = 0;
         IME_SendEditingEvent(videodata);
+        IME_SendEditingExEvent(videodata, SDL_FALSE);
         preading->lpVtbl->Release(preading);
     }
     if (SUCCEEDED(element->lpVtbl->QueryInterface(element, &IID_ITfCandidateListUIElement, (LPVOID *)&pcandlist))) {

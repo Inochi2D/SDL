@@ -35,9 +35,6 @@
 
 #include <imm.h>
 
-#define MAX_CANDLIST    10
-#define MAX_CANDLENGTH  256
-
 #include "SDL_windowsclipboard.h"
 #include "SDL_windowsevents.h"
 #include "SDL_windowskeyboard.h"
@@ -153,6 +150,8 @@ typedef struct SDL_VideoData
     WCHAR ime_composition[SDL_TEXTEDITINGEVENT_TEXT_SIZE];
     WCHAR ime_readingstring[16];
     int ime_cursor;
+    Uint16 ime_target_start;
+    Uint16 ime_target_end;
 
     SDL_bool ime_candlist;
     WCHAR ime_candidates[MAX_CANDLIST][MAX_CANDLENGTH];

@@ -46,6 +46,7 @@ static SDL_Color backColor = {255,255,255,255};
 static SDL_Color textColor = {0,0,0,255};
 static char text[MAX_TEXT_LENGTH], markedText[SDL_TEXTEDITINGEVENT_TEXT_SIZE];
 static int cursor = 0;
+static int cursor_end = 0;
 #ifdef HAVE_SDL_TTF
 static TTF_Font *font;
 #else
@@ -450,11 +451,13 @@ void InitInput()
     markedText[0] = 0;
 
     SDL_StartTextInput();
+    SDL_EventState(SDL_TEXTEDITINGEX, SDL_ENABLE);
 }
 
 void CleanupVideo()
 {
     SDL_StopTextInput();
+    SDL_EventState(SDL_TEXTEDITINGEX, SDL_DISABLE);
 #ifdef HAVE_SDL_TTF
     TTF_CloseFont(font);
     TTF_Quit();
@@ -518,11 +521,13 @@ void _Redraw(int rendererID)
     {
         /* Stop text input because we cannot hold any more characters */
         SDL_StopTextInput();
+        SDL_EventState(SDL_TEXTEDITINGEX, SDL_DISABLE);
         return;
     }
     else
     {
         SDL_StartTextInput();
+        SDL_EventState(SDL_TEXTEDITINGEX, SDL_ENABLE);
     }
 
     cursorRect = drawnTextRect;
@@ -538,21 +543,31 @@ void _Redraw(int rendererID)
 
     if (markedText[0])
     {
+        underlineRect = markedRect;
+        underlineRect.w = 0;
 #ifdef HAVE_SDL_TTF
         SDL_Surface *textSur;
         SDL_Texture *texture;
         if (cursor)
         {
             char *p = utf8_advance(markedText, cursor);
-            char c = 0;
+            char *t = utf8_advance(p, cursor_end - cursor);
+            char cp = 0, ct = 0;
             if (!p)
                 p = &markedText[SDL_strlen(markedText)];
+            if (!t)
+                t = &markedText[SDL_strlen(markedText)];
 
-            c = *p;
+            cp = *p;
             *p = 0;
             TTF_SizeUTF8(font, markedText, &drawnTextRect.w, NULL);
             cursorRect.x += drawnTextRect.w;
-            *p = c;
+            *p = cp;
+
+            ct = *t;
+            *t = 0;
+            TTF_SizeUTF8(font, p, &underlineRect.w, NULL);
+            *t = ct;
         }
         textSur = TTF_RenderUTF8_Blended(font, markedText, textColor);
         /* Vertically center text */
@@ -586,6 +601,8 @@ void _Redraw(int rendererID)
             drawnTextRect.w += advance;
             if (i < cursor)
                 cursorRect.x += advance;
+            else if (i < cursor_end)
+                underlineRect.w += advance;
             i++;
             utext += len;
         }
@@ -597,10 +614,9 @@ void _Redraw(int rendererID)
             cursorRect.h = drawnTextRect.h;
         }
 
-        underlineRect = markedRect;
+        underlineRect.x = cursorRect.x;
         underlineRect.y = drawnTextRect.y + drawnTextRect.h - 2;
         underlineRect.h = 2;
-        underlineRect.w = drawnTextRect.w;
 
         SDL_SetRenderDrawColor(renderer, lineColor.r, lineColor.g, lineColor.b, lineColor.a);
         SDL_RenderFillRect(renderer, &underlineRect);
@@ -704,7 +720,7 @@ int main(int argc, char *argv[])
     while (!done) {
         /* Check for events */
         while (SDL_PollEvent(&event)) {
-            SDLTest_CommonEvent(state, &event, &done);
+            /* SDLTest_CommonEvent(state, &event, &done); */
             switch(event.type) {
                 case SDL_KEYDOWN: {
                     switch (event.key.keysym.sym)
@@ -760,7 +776,37 @@ int main(int argc, char *argv[])
                             event.key.keysym.sym, SDL_GetKeyName(event.key.keysym.sym));
                     break;
 
-                case SDL_TEXTINPUT:
+                case SDL_TEXTEDITINGEX:
+                    if (event.editx.commit) {
+                        if (!event.editx.composition ||
+                            !event.editx.composition[0] || event.editx.composition[0] == '\n' ||
+                            markedRect.w < 0)
+                            break;
+
+                        SDL_Log("Keyboard: text input \"%s\"\n", event.editx.composition);
+
+                        if (SDL_strlen(text) + SDL_strlen(event.editx.composition) < sizeof(text))
+                            SDL_strlcat(text, event.editx.composition, sizeof(text));
+
+                        SDL_Log("text inputed: %s\n", text);
+
+                        /* After text inputed, we can clear up markedText because it */
+                        /* is committed */
+                        markedText[0] = 0;
+                        Redraw();
+                        break;
+                    } else {
+                        SDL_Log("text editing \"%s\", target range (%d, %d)\n",
+                                event.editx.composition, event.editx.target_start, event.editx.target_end);
+
+                        SDL_strlcpy(markedText, event.editx.composition, SDL_TEXTEDITINGEVENT_TEXT_SIZE);
+                        cursor = event.editx.target_start;
+                        cursor_end = event.editx.target_end;
+                        Redraw();
+                        break;
+                    }
+
+                // case SDL_TEXTINPUT:
                     if (event.text.text[0] == '\0' || event.text.text[0] == '\n' ||
                         markedRect.w < 0)
                         break;
@@ -778,7 +824,7 @@ int main(int argc, char *argv[])
                     Redraw();
                     break;
 
-                case SDL_TEXTEDITING:
+                // case SDL_TEXTEDITING:
                     SDL_Log("text editing \"%s\", selected range (%d, %d)\n",
                             event.edit.text, event.edit.start, event.edit.length);
 

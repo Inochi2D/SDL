@@ -439,6 +439,7 @@ SDL_StartEventLoop(void)
     /* Process most event types */
     SDL_EventState(SDL_TEXTINPUT, SDL_DISABLE);
     SDL_EventState(SDL_TEXTEDITING, SDL_DISABLE);
+    SDL_EventState(SDL_TEXTEDITINGEX, SDL_DISABLE);
     SDL_EventState(SDL_SYSWMEVENT, SDL_DISABLE);
 #if 0 /* Leave these events enabled so apps can respond to items being dragged onto them at startup */
     SDL_EventState(SDL_DROPFILE, SDL_DISABLE);

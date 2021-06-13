@@ -118,6 +118,53 @@ GetAppName()
     return SDL_strdup("SDL_App");
 }
 
+typedef SDL_bool (*typecb)(Sint32);
+
+static SDL_bool isHIGHLIGHT(Sint32 type) {
+    return (MSG_HIGHLIGHT & type);
+}
+
+static SDL_bool isnotHIGHLIGHT(Sint32 type) {
+    return !(MSG_HIGHLIGHT & type);
+}
+
+/* returns SDL_TRUE if the process continues */
+/* returns SDL_FALSE if the preedit or the buffer ran out */
+static SDL_bool AppendFmtPreedit(SDL_DBusContext *dbus, DBusMessageIter *array,
+                                 char **bufptr, size_t *buflen,
+                                 size_t *sumchars, size_t *lastchars, typecb callback) {
+    do {
+        struct FcitxPreeditItem {
+            char* string;
+            Sint32 type;
+        } fitem;
+        DBusMessageIter fstru;
+        if (DBUS_TYPE_STRUCT == dbus->message_iter_get_arg_type(array)) {
+            dbus->message_iter_recurse(array, &fstru);
+            dbus->message_iter_get_basic(&fstru, &fitem.string);
+            if (fitem.string && dbus->message_iter_next(&fstru)) {
+                size_t bytes = SDL_utf8strlcpy(*bufptr, fitem.string, *buflen);
+                *lastchars = SDL_utf8strlen(*bufptr);
+                *bufptr += bytes;
+                if (bytes >= *buflen)
+                    bytes = *buflen;
+                *buflen -= bytes;
+                /* maybe buflen==0, but even in that case, */
+                /* the last fragment should be processed later */
+                dbus->message_iter_get_basic(&fstru, &fitem.type);
+                if ((callback) && callback(fitem.type)) {
+                    dbus->message_iter_next(array);
+                    return SDL_TRUE;
+                }
+                *sumchars += *lastchars;
+            } else
+                break;
+        } else
+            break;
+    } while (*buflen && dbus->message_iter_next(array));
+    return SDL_FALSE;
+}
+
 static DBusHandlerResult
 DBus_MessageFilter(DBusConnection *conn, DBusMessage *msg, void *data)
 {
@@ -125,39 +172,51 @@ DBus_MessageFilter(DBusConnection *conn, DBusMessage *msg, void *data)
 
     if (dbus->message_is_signal(msg, FCITX_IC_DBUS_INTERFACE, "CommitString")) {
         DBusMessageIter iter;
-        const char *text = NULL;
+        char *text = NULL;
 
         dbus->message_iter_init(msg, &iter);
         dbus->message_iter_get_basic(&iter, &text);
 
-        if (text)
+        if (text){
             SDL_SendKeyboardText(text);
+            SDL_SendEditingTextEx(text, SDL_TRUE, 0, 0, 0, 0, NULL, 0);
+        }
 
         return DBUS_HANDLER_RESULT_HANDLED;
     }
 
-    if (dbus->message_is_signal(msg, FCITX_IC_DBUS_INTERFACE, "UpdatePreedit")) {
-        DBusMessageIter iter;
-        const char *text;
+    if (dbus->message_is_signal(msg, FCITX_IC_DBUS_INTERFACE, "UpdateFormattedPreedit")) {
+        DBusMessageIter iter, array;
+        char buf[SDL_TEXTEDITINGEVENT_TEXT_SIZE], *bufptr = buf;
+        size_t target_start = 0, target_end = 0, sumchars = 0, chars = 0, buflen = sizeof(buf);
+        buf[0] = '\0';
 
         dbus->message_iter_init(msg, &iter);
-        dbus->message_iter_get_basic(&iter, &text);
+        dbus->message_iter_recurse(&iter, &array);
 
-        if (text && *text) {
-            char buf[SDL_TEXTEDITINGEVENT_TEXT_SIZE];
-            size_t text_bytes = SDL_strlen(text), i = 0;
-            size_t cursor = 0;
-
-            while (i < text_bytes) {
-                const size_t sz = SDL_utf8strlcpy(buf, text + i, sizeof(buf));
-                const size_t chars = SDL_utf8strlen(buf);
-
-                SDL_SendEditingText(buf, cursor, chars);
-
-                i += sz;
-                cursor += chars;
+        if (AppendFmtPreedit(dbus, &array, &bufptr, &buflen, &target_start, &chars, isHIGHLIGHT)) {
+            /* found target_start */
+            target_end = target_start + chars;
+            if (AppendFmtPreedit(dbus, &array, &bufptr, &buflen, &target_end, &chars, isnotHIGHLIGHT)) {
+                /* found target_end */
+                sumchars = target_end + chars;
+                AppendFmtPreedit(dbus, &array, &bufptr, &buflen, &sumchars, &chars, NULL);
+            } else {
+                /* preedit ended at target_end */
+                /* ...or found an error */
+                sumchars = target_end;
             }
+        } else {
+            /* found no target and reached at the end */
+            /* ...or found an error */
+            target_end = target_start;
+            sumchars = target_end;
         }
+
+        /* readingstring is not supported */
+        SDL_SendEditingText(buf, sumchars, 0);
+        /* candidate list is not supported */
+        SDL_SendEditingTextEx(buf, SDL_FALSE, 0, target_start, target_end, 0, NULL, 0);
 
         SDL_Fcitx_UpdateTextRect(NULL);
         return DBUS_HANDLER_RESULT_HANDLED;
@@ -182,7 +241,7 @@ Fcitx_SetCapabilities(void *data,
     Uint32 caps = CAPACITY_NONE;
 
     if (!(internal_editing && *internal_editing == '1')) {
-        caps |= CAPACITY_PREEDIT;
+        caps |= CAPACITY_PREEDIT | CAPACITY_FORMATTED_PREEDIT;
     }
 
     SDL_DBus_CallVoidMethod(client->servicename, client->icname, FCITX_IC_DBUS_INTERFACE, "SetCapacity", DBUS_TYPE_UINT32, &caps, DBUS_TYPE_INVALID);

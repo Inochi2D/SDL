@@ -3759,6 +3759,7 @@ SDL_StartTextInput(void)
     /* First, enable text events */
     SDL_EventState(SDL_TEXTINPUT, SDL_ENABLE);
     SDL_EventState(SDL_TEXTEDITING, SDL_ENABLE);
+    /* SDL_TEXTEDITINGEX needs explicit enabling */
 
     /* Then show the on-screen keyboard, if any */
     window = SDL_GetFocusWindow();
@@ -3797,6 +3798,7 @@ SDL_StopTextInput(void)
     /* Finally disable text events */
     SDL_EventState(SDL_TEXTINPUT, SDL_DISABLE);
     SDL_EventState(SDL_TEXTEDITING, SDL_DISABLE);
+    /* SDL_TEXTEDITINGEX has not been enabled automatically */
 }
 
 void

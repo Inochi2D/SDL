@@ -67,43 +67,62 @@ IBus_ModState(void)
 }
 
 static const char *
-IBus_GetVariantText(DBusConnection *conn, DBusMessageIter *iter, SDL_DBusContext *dbus)
+IBus_GetVariantText(DBusConnection *conn, DBusMessageIter *iter, SDL_DBusContext *dbus, Uint32 *start, Uint32 *end)
 {
     /* The text we need is nested weirdly, use dbus-monitor to see the structure better */
     const char *text = NULL;
     const char *struct_id = NULL;
-    DBusMessageIter sub1, sub2;
+    DBusMessageIter sub1, sub2, sub3, sub4;
+    Uint32 attr, value;
 
-    if (dbus->message_iter_get_arg_type(iter) != DBUS_TYPE_VARIANT) {
-        return NULL;
+    if (dbus->message_iter_get_arg_type(iter) == DBUS_TYPE_VARIANT) {
+        dbus->message_iter_recurse(iter, &sub1);
+        if (dbus->message_iter_get_arg_type(&sub1) == DBUS_TYPE_STRUCT) {
+            dbus->message_iter_recurse(&sub1, &sub2);
+            if (dbus->message_iter_get_arg_type(&sub2) == DBUS_TYPE_STRING) {
+                dbus->message_iter_get_basic(&sub2, &struct_id);
+                if (struct_id && SDL_strncmp(struct_id, "IBusText", sizeof("IBusText")) == 0) {
+                    dbus->message_iter_next(&sub2);
+                    dbus->message_iter_next(&sub2);
+                    if (dbus->message_iter_get_arg_type(&sub2) == DBUS_TYPE_STRING) {
+                        dbus->message_iter_get_basic(&sub2, &text);
+                        if (start == NULL || end == NULL) {
+                            return text;
+                        }
+                    }
+                    dbus->message_iter_next(&sub2);
+                    if (dbus->message_iter_get_arg_type(&sub2) == DBUS_TYPE_ARRAY) {
+                        dbus->message_iter_recurse(&sub2, &sub3);
+                        while (dbus->message_iter_get_arg_type(&sub3) == DBUS_TYPE_STRUCT) {
+                            /* http://ibus.github.io/docs/ibus-1.5/IBusAttribute.html#IBusAttribute-struct */
+                            dbus->message_iter_recurse(&sub3, &sub4);
+                            if (dbus->message_iter_get_arg_type(&sub4) == DBUS_TYPE_UINT32) {
+                                dbus->message_iter_get_basic(&sub4, &attr);
+                                if (attr == 1) { /* underline */
+                                    dbus->message_iter_next(&sub4);
+                                    if (dbus->message_iter_get_arg_type(&sub4) == DBUS_TYPE_UINT32) {
+                                        dbus->message_iter_get_basic(&sub4, &value);
+                                        if (value == 1 || value == 2) { /* single or double */
+                                            dbus->message_iter_next(&sub4);
+                                            if (dbus->message_iter_get_arg_type(&sub4) == DBUS_TYPE_UINT32) {
+                                                dbus->message_iter_get_basic(&sub4, start);
+                                                dbus->message_iter_next(&sub4);
+                                                if (dbus->message_iter_get_arg_type(&sub4) == DBUS_TYPE_UINT32) {
+                                                    dbus->message_iter_get_basic(&sub4, end);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
-    
-    dbus->message_iter_recurse(iter, &sub1);
-    
-    if (dbus->message_iter_get_arg_type(&sub1) != DBUS_TYPE_STRUCT) {
-        return NULL;
-    }
-    
-    dbus->message_iter_recurse(&sub1, &sub2);
-    
-    if (dbus->message_iter_get_arg_type(&sub2) != DBUS_TYPE_STRING) {
-        return NULL;
-    }
-    
-    dbus->message_iter_get_basic(&sub2, &struct_id);
-    if (!struct_id || SDL_strncmp(struct_id, "IBusText", sizeof("IBusText")) != 0) {
-        return NULL;
-    }
-    
-    dbus->message_iter_next(&sub2);
-    dbus->message_iter_next(&sub2);
-    
-    if (dbus->message_iter_get_arg_type(&sub2) != DBUS_TYPE_STRING) {
-        return NULL;
-    }
-    
-    dbus->message_iter_get_basic(&sub2, &text);
-    
+
     return text;
 }
 
@@ -118,7 +137,7 @@ IBus_MessageHandler(DBusConnection *conn, DBusMessage *msg, void *user_data)
 
         dbus->message_iter_init(msg, &iter);
         
-        text = IBus_GetVariantText(conn, &iter, dbus);
+        text = IBus_GetVariantText(conn, &iter, dbus, NULL, NULL);
         if (text && *text) {
             char buf[SDL_TEXTINPUTEVENT_TEXT_SIZE];
             size_t text_bytes = SDL_strlen(text), i = 0;
@@ -126,6 +145,7 @@ IBus_MessageHandler(DBusConnection *conn, DBusMessage *msg, void *user_data)
             while (i < text_bytes) {
                 size_t sz = SDL_utf8strlcpy(buf, text+i, sizeof(buf));
                 SDL_SendKeyboardText(buf);
+                SDL_SendEditingTextEx(buf, SDL_TRUE, 0, 0, 0, SDL_FALSE, NULL, 0);
                 
                 i += sz;
             }
@@ -137,25 +157,20 @@ IBus_MessageHandler(DBusConnection *conn, DBusMessage *msg, void *user_data)
     if (dbus->message_is_signal(msg, IBUS_INPUT_INTERFACE, "UpdatePreeditText")) {
         DBusMessageIter iter;
         const char *text;
+        Uint32 start, end;
+        char buf[SDL_TEXTEDITINGEVENT_TEXT_SIZE];
+        size_t chars;
 
         dbus->message_iter_init(msg, &iter);
-        text = IBus_GetVariantText(conn, &iter, dbus);
+        text = IBus_GetVariantText(conn, &iter, dbus, &start, &end);
         
-        if (text) {
-            char buf[SDL_TEXTEDITINGEVENT_TEXT_SIZE];
-            size_t text_bytes = SDL_strlen(text), i = 0;
-            size_t cursor = 0;
-            
-            do {
-                const size_t sz = SDL_utf8strlcpy(buf, text+i, sizeof(buf));
-                const size_t chars = SDL_utf8strlen(buf);
-                
-                SDL_SendEditingText(buf, cursor, chars);
-
-                i += sz;
-                cursor += chars;
-            } while (i < text_bytes);
-        }
+        SDL_utf8strlcpy(buf, text, sizeof(buf));
+        chars = SDL_utf8strlen(buf);
+ 
+        /* readingstring is not supported */
+        SDL_SendEditingText(buf, chars, 0);
+        /* candidate list is not supported */
+        SDL_SendEditingTextEx(buf, SDL_FALSE, chars, start, end, SDL_FALSE, NULL, 0);
         
         SDL_IBus_UpdateTextRect(NULL);
         
@@ -164,6 +179,7 @@ IBus_MessageHandler(DBusConnection *conn, DBusMessage *msg, void *user_data)
     
     if (dbus->message_is_signal(msg, IBUS_INPUT_INTERFACE, "HidePreeditText")) {
         SDL_SendEditingText("", 0, 0);
+        SDL_SendEditingTextEx("", SDL_FALSE, 0, 0, 0, SDL_FALSE, NULL, 0);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
     

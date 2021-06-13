@@ -96,6 +96,7 @@ typedef enum
     SDL_KEYDOWN        = 0x300, /**< Key pressed */
     SDL_KEYUP,                  /**< Key released */
     SDL_TEXTEDITING,            /**< Keyboard text editing (composition) */
+    SDL_TEXTEDITINGEX,          /**< Keyboard text editing with extra information */
     SDL_TEXTINPUT,              /**< Keyboard text input */
     SDL_KEYMAPCHANGED,          /**< Keymap changed due to a system event such as an
                                      input language or keyboard layout change.
@@ -220,7 +221,8 @@ typedef struct SDL_KeyboardEvent
     SDL_Keysym keysym;  /**< The key that was pressed or released */
 } SDL_KeyboardEvent;
 
-#define SDL_TEXTEDITINGEVENT_TEXT_SIZE (32)
+#define SDL_TEXTEDITINGEVENT_TEXT_MINI (32)
+#define SDL_TEXTEDITINGEVENT_TEXT_SIZE (512)
 /**
  *  \brief Keyboard text editing event structure (event.edit.*)
  */
@@ -229,13 +231,35 @@ typedef struct SDL_TextEditingEvent
     Uint32 type;                                /**< ::SDL_TEXTEDITING */
     Uint32 timestamp;                           /**< In milliseconds, populated using SDL_GetTicks() */
     Uint32 windowID;                            /**< The window with keyboard focus, if any */
-    char text[SDL_TEXTEDITINGEVENT_TEXT_SIZE];  /**< The editing text */
-    Sint32 start;                               /**< The start cursor of selected editing text */
-    Sint32 length;                              /**< The length of selected editing text */
+    char text[SDL_TEXTEDITINGEVENT_TEXT_MINI];  /**< The editing text */
+    Sint32 start;                               /**< The cursor, where the reading string starts if any */
+    Sint32 length;                              /**< The length of the reading string */
 } SDL_TextEditingEvent;
 
+#define MAX_CANDLIST (10)
+#define MAX_CANDLENGTH (256)
+#define AVG_UTF8_CHAR_LENGTH (2)
+#define MAX_CANDLIST_SIZE (MAX_CANDLIST * MAX_CANDLENGTH * AVG_UTF8_CHAR_LENGTH)
+/**
+ * \brief Keyboard text editing event structure with extra information (event.editx.*)
+ */
+typedef struct SDL_TextEditingExEvent
+{
+    Uint32 type;          /**< ::SDL_TEXTEDITINGEX */
+    Uint32 timestamp;     /**< In milliseconds, populated using SDL_GetTicks() */
+    Uint32 windowID;      /**< The window with keyboard focus, if any */
+    char* composition;    /**< The editing text, needs freeing */
+    SDL_bool commit;      /**< Whether the event should be treated as TEXTINPUT */
+    Uint16 cursor;        /**< The cursor position */
+    Uint16 target_start;  /**< The starting point of editing part */
+    Uint16 target_end;    /**< The length of editing part */
+    SDL_bool candshow;    /**< Whether to show candidate list */
+    char* candidates;     /**< The candidate array[MAX_CANDLIST][MAX_CANDLENGTH], needs freeing */
+    Sint8 candsel;        /**< The cursor of the candidate list */
+} SDL_TextEditingExEvent;
 
-#define SDL_TEXTINPUTEVENT_TEXT_SIZE (32)
+#define SDL_TEXTINPUTEVENT_TEXT_MINI (32)
+#define SDL_TEXTINPUTEVENT_TEXT_SIZE (512)
 /**
  *  \brief Keyboard text input event structure (event.text.*)
  */
@@ -244,7 +268,7 @@ typedef struct SDL_TextInputEvent
     Uint32 type;                              /**< ::SDL_TEXTINPUT */
     Uint32 timestamp;                         /**< In milliseconds, populated using SDL_GetTicks() */
     Uint32 windowID;                          /**< The window with keyboard focus, if any */
-    char text[SDL_TEXTINPUTEVENT_TEXT_SIZE];  /**< The input text */
+    char text[SDL_TEXTINPUTEVENT_TEXT_MINI];  /**< The input text */
 } SDL_TextInputEvent;
 
 /**
@@ -563,6 +587,7 @@ typedef union SDL_Event
     SDL_WindowEvent window;         /**< Window event data */
     SDL_KeyboardEvent key;          /**< Keyboard event data */
     SDL_TextEditingEvent edit;      /**< Text editing event data */
+    SDL_TextEditingExEvent editx;   /**< Text editing EX event data */
     SDL_TextInputEvent text;        /**< Text input event data */
     SDL_MouseMotionEvent motion;    /**< Mouse motion event data */
     SDL_MouseButtonEvent button;    /**< Mouse button event data */
